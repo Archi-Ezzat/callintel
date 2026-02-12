@@ -23,6 +23,7 @@ class AppConfig:
     llm_model_path: Path | None
     llm_quantization: str | None
     llm_output_language: str
+    classifier_model_path: Path | None
     sample_rate: int
     chunk_seconds: int
     chunk_overlap_seconds: int
@@ -51,6 +52,8 @@ class AppConfig:
             os.getenv("LLM_OUTPUT_LANGUAGE", "").strip().lower()
             or (language.lower() if language else "en")
         )
+        classifier_path_raw = os.getenv("CLASSIFIER_MODEL_PATH", "").strip()
+        classifier_model_path = (resolved_root / classifier_path_raw) if classifier_path_raw else None
 
         trigger_terms = _split_csv(os.getenv("TRIGGER_TERMS"))
         if not trigger_terms:
@@ -73,6 +76,7 @@ class AppConfig:
             llm_model_path=llm_model_path,
             llm_quantization=llm_quantization,
             llm_output_language=llm_output_language,
+            classifier_model_path=classifier_model_path,
             sample_rate=int(os.getenv("SAMPLE_RATE", "16000")),
             chunk_seconds=int(os.getenv("CHUNK_SECONDS", "30")),
             chunk_overlap_seconds=int(os.getenv("CHUNK_OVERLAP_SECONDS", "2")),
@@ -87,3 +91,5 @@ def ensure_base_dirs(config: AppConfig) -> None:
     config.input_calls_dir.mkdir(parents=True, exist_ok=True)
     config.work_dir.mkdir(parents=True, exist_ok=True)
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    if config.classifier_model_path is not None:
+        config.classifier_model_path.mkdir(parents=True, exist_ok=True)

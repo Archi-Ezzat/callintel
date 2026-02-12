@@ -85,6 +85,40 @@ To force Arabic transcription and Arabic LLM reports:
 - `LANGUAGE=ar`
 - `LLM_OUTPUT_LANGUAGE=ar`
 
+## Classifier (Multi-Path Accuracy)
+
+This project supports a rule-based risk engine **and** an optional ML classifier.
+
+### Seed data
+
+Seed samples live in:
+
+`data/training/seed.jsonl`
+
+Create your training file by copying:
+
+`data/training/seed.jsonl` → `data/training/train.jsonl`
+
+You can add more data or generate synthetic samples, then (optionally) create:
+
+`data/training/val.jsonl`
+
+### Train the classifier
+
+```bash
+.\.venv\Scripts\python.exe -m src.train_classifier
+```
+
+This fine-tunes `UBC-NLP/MARBERTv2` and writes to:
+
+`models/classifier`
+
+### Use the classifier in the pipeline
+
+Set:
+
+`CLASSIFIER_MODEL_PATH=models/classifier`
+
 ## Input
 
 Drop your audio files in:
@@ -116,7 +150,8 @@ Final deliverables go to:
 Inside you will see exactly two folders:
 
 - `Transcript/` (contains `transcript.txt` and `transcript.json`)
-- `LLM_Justification/` (contains `llm_report.txt`, `llm_report.json`, `score.json`)
+- `LLM_Justification/` (contains `llm_report.txt`, `llm_report.json`, `score.json`,
+  plus `risk_detail.json` and `risk_summary.txt`)
 
 Intermediate artifacts still live in the workspace directory:
 

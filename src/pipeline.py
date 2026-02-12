@@ -8,6 +8,9 @@ from .config import AppConfig, ensure_base_dirs
 from .evaluate_llm import evaluate_transcript, format_llm_report_text
 from .merge import merge_transcripts
 from .transcribe import WhisperTranscriber
+from .bad_words_dataset import bad_words_dataset
+from .classifier import TextClassifier
+from .risk_engine import RiskEvaluator
 from .triggers import write_triggers
 from .utils_audio import chunk_audio, copy_audio, normalize_audio, slugify
 from transformers.utils import logging as hf_logging
@@ -91,6 +94,84 @@ def process_file(
     triggers_path = analysis_dir / "triggers.json"
     write_triggers(merged["full_text"], config.trigger_terms, triggers_path)
 
+    # Risk scoring (rule-based)
+    evaluator = RiskEvaluator(bad_words_dataset)
+    risk_payload = evaluator.analyze_text(merged["full_text"])
+    risk_detail_path = analysis_dir / "risk_detail.json"
+    risk_summary_path = analysis_dir / "risk_summary.txt"
+    risk_detail_path.write_text(
+        json.dumps(risk_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    risk_summary_lines = [
+        "ملخص المخاطر",
+        f"درجة الخطورة: {risk_payload.get('risk_percentage')}",
+        f"التصنيف: {risk_payload.get('risk_label')}",
+        f"أعلى فئة خطورة: {risk_payload.get('max_severity_category')}",
+        f"الفئات المفعّلة: {', '.join(risk_payload.get('triggered_categories') or [])}",
+        f"عدد الكلمات الخطرة: {len(risk_payload.get('detected_words') or [])}",
+    ]
+    risk_summary_path.write_text("\n".join(risk_summary_lines) + "\n", encoding="utf-8")
+
+    classifier_payload = None
+    classifier_summary_path = analysis_dir / "classifier_summary.txt"
+    classifier_detail_path = analysis_dir / "classifier_detail.json"
+    combined_risk_path = analysis_dir / "combined_risk.json"
+    combined_summary_path = analysis_dir / "combined_risk.txt"
+
+    if config.classifier_model_path and config.classifier_model_path.exists():
+        classifier = TextClassifier(config.classifier_model_path, device=config.device)
+        result = classifier.predict(merged["full_text"])
+        classifier_payload = {
+            "top_label": result.top_label,
+            "top_score": result.top_score,
+            "category": result.category,
+            "category_score": result.category_score,
+            "category_scores": result.category_scores,
+            "risk_score": result.risk_score,
+            "raw_scores": result.raw_scores,
+        }
+        classifier_detail_path.write_text(
+            json.dumps(classifier_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        classifier_summary_path.write_text(
+            "\n".join(
+                [
+                    "ملخص المصنف",
+                    f"التصنيف الأعلى: {result.top_label} ({round(result.top_score, 4)})",
+                    f"الفئة المطابقة: {result.category}",
+                    f"درجة خطورة المصنف: {round(result.risk_score, 4)}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    rule_score = float(risk_payload.get("risk_score", 0.0))
+    classifier_score = float(classifier_payload.get("risk_score", 0.0)) if classifier_payload else 0.0
+    final_score = max(rule_score, classifier_score)
+    final_percentage = round(final_score * 100, 2)
+    combined_payload = {
+        "rule_risk_score": rule_score,
+        "classifier_risk_score": classifier_score,
+        "final_risk_score": final_score,
+        "final_risk_percentage": f"{final_percentage}%",
+    }
+    combined_risk_path.write_text(
+        json.dumps(combined_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    combined_summary_path.write_text(
+        "\n".join(
+            [
+                "ملخص المخاطر النهائي",
+                f"خطر القواعد: {round(rule_score, 4)}",
+                f"خطر المصنف: {round(classifier_score, 4)}",
+                f"الخطر النهائي: {final_percentage}%",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     if not skip_llm:
         evaluate_transcript(
             Path(merged["json_path"]),
@@ -129,6 +210,32 @@ def process_file(
     else:
         llm_text_path.write_text(
             "LLM summary was skipped for this run.\n", encoding="utf-8"
+        )
+
+    # Risk outputs to LLM_Justification
+    if risk_detail_path.exists():
+        (llm_output_dir / "risk_detail.json").write_text(
+            risk_detail_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    if risk_summary_path.exists():
+        (llm_output_dir / "risk_summary.txt").write_text(
+            risk_summary_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    if classifier_detail_path.exists():
+        (llm_output_dir / "classifier_detail.json").write_text(
+            classifier_detail_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    if classifier_summary_path.exists():
+        (llm_output_dir / "classifier_summary.txt").write_text(
+            classifier_summary_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    if combined_risk_path.exists():
+        (llm_output_dir / "combined_risk.json").write_text(
+            combined_risk_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    if combined_summary_path.exists():
+        (llm_output_dir / "combined_risk.txt").write_text(
+            combined_summary_path.read_text(encoding="utf-8"), encoding="utf-8"
         )
 
     return output_dir
