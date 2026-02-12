@@ -49,3 +49,6 @@ models/
 *.joblib
 *.h5
 *.tflite
+
+# Secrets
+.env
