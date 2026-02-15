@@ -22,6 +22,8 @@ class AppConfig:
     whisper_model_path: Path
     llm_model_path: Path | None
     llm_quantization: str | None
+    llm_api_base_url: str
+    llm_api_model: str | None
     llm_output_language: str
     classifier_model_path: Path | None
     sample_rate: int
@@ -47,6 +49,8 @@ class AppConfig:
         llm_path_raw = os.getenv("LLM_MODEL_PATH", "models/llm").strip()
         llm_model_path = (resolved_root / llm_path_raw) if llm_path_raw else None
         llm_quantization = os.getenv("LLM_QUANTIZATION", "").strip().lower() or None
+        llm_api_base_url = os.getenv("LLM_API_BASE_URL", "http://127.0.0.1:1234/v1").strip()
+        llm_api_model = os.getenv("LLM_API_MODEL", "").strip() or None
         language = os.getenv("LANGUAGE", "").strip()
         llm_output_language = (
             os.getenv("LLM_OUTPUT_LANGUAGE", "").strip().lower()
@@ -75,6 +79,8 @@ class AppConfig:
             whisper_model_path=whisper_model_path,
             llm_model_path=llm_model_path,
             llm_quantization=llm_quantization,
+            llm_api_base_url=llm_api_base_url,
+            llm_api_model=llm_api_model,
             llm_output_language=llm_output_language,
             classifier_model_path=classifier_model_path,
             sample_rate=int(os.getenv("SAMPLE_RATE", "16000")),

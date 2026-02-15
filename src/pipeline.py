@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .config import AppConfig, ensure_base_dirs
@@ -18,6 +19,17 @@ from transformers.utils import logging as hf_logging
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
 TRANSCRIPT_DIR_NAME = "Transcript"
 LLM_DIR_NAME = "LLM_Justification"
+
+
+def _safe_console_print(message: str) -> None:
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        safe = message.encode(encoding, errors="backslashreplace").decode(
+            encoding, errors="ignore"
+        )
+        print(safe)
 
 
 def _next_work_index(work_dir: Path) -> int:
@@ -179,6 +191,8 @@ def process_file(
             analysis_dir,
             llm_model_path=config.llm_model_path,
             llm_quantization=config.llm_quantization,
+            llm_api_base_url=config.llm_api_base_url,
+            llm_api_model=config.llm_api_model,
             llm_output_language=config.llm_output_language,
         )
 
@@ -261,7 +275,7 @@ def main() -> None:
         files = _list_input_files(config.input_calls_dir)
 
     if not files:
-        print(f"No input audio files found in {config.input_calls_dir}")
+        _safe_console_print(f"No input audio files found in {config.input_calls_dir}")
         return
 
     transcriber = WhisperTranscriber(
@@ -273,7 +287,7 @@ def main() -> None:
 
     for audio_file in files:
         if not audio_file.exists():
-            print(f"Skipping missing file: {audio_file}")
+            _safe_console_print(f"Skipping missing file: {audio_file}")
             continue
         out_dir = process_file(
             audio_file=audio_file,
@@ -282,7 +296,7 @@ def main() -> None:
             skip_llm=args.skip_llm,
             force=args.force,
         )
-        print(f"Processed: {audio_file.name} -> {out_dir}")
+        _safe_console_print(f"Processed: {audio_file.name} -> {out_dir}")
 
 
 if __name__ == "__main__":

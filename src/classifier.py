@@ -75,13 +75,20 @@ class TextClassifier:
             model=model,
             tokenizer=tokenizer,
             device=device_index,
-            return_all_scores=True,
+            top_k=None,
             dtype=torch_dtype if device_index >= 0 else None,
         )
 
     def predict(self, text: str) -> ClassifierResult:
         raw = self.pipe(text)
-        scores = raw[0] if raw else []
+        scores: list[dict] = []
+        if isinstance(raw, list) and raw:
+            first = raw[0]
+            if isinstance(first, list):
+                scores = first
+            elif isinstance(first, dict):
+                # Transformers may return either [dict] (top-1) or [[dict, ...]] (all labels).
+                scores = [first]
 
         top = max(scores, key=lambda item: item["score"]) if scores else {"label": "SAFE", "score": 0.0}
         top_label = top["label"]

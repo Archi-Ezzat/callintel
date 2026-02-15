@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -87,8 +88,18 @@ def main() -> None:
     train_data = Dataset.from_list(_prep(train_rows))
     val_data = Dataset.from_list(_prep(val_rows)) if val_rows else None
 
-    model_id = "UBC-NLP/MARBERTv2"
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    base_model_env = os.getenv("CLASSIFIER_BASE_MODEL", "").strip()
+    if base_model_env:
+        candidate = Path(base_model_env)
+        if not candidate.is_absolute():
+            candidate = (root / candidate).resolve()
+        model_source = str(candidate) if candidate.exists() else base_model_env
+    else:
+        local_default = root / "models" / "marbertv2-base"
+        model_source = str(local_default) if local_default.exists() else "UBC-NLP/MARBERTv2"
+
+    local_only = Path(model_source).exists()
+    tokenizer = AutoTokenizer.from_pretrained(model_source, local_files_only=local_only)
 
     def tokenize(batch):
         return tokenizer(batch["text"], truncation=True, max_length=128)
@@ -98,7 +109,8 @@ def main() -> None:
         val_data = val_data.map(tokenize, batched=True)
 
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_id,
+        model_source,
+        local_files_only=local_only,
         num_labels=len(LABELS),
         id2label={i: label for i, label in enumerate(LABELS)},
         label2id={label: i for i, label in enumerate(LABELS)},
