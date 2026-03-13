@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 from urllib import error as url_error
@@ -8,6 +9,8 @@ from urllib import request as url_request
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, pipeline
+
+logger = logging.getLogger(__name__)
 
 
 def _heuristic_summary(
@@ -28,12 +31,20 @@ def _heuristic_summary(
     )
     top_terms = [term for term, count in top_terms if count > 0][:5]
 
-    summary = "Conversation processed locally. Trigger density was used as the main risk signal."
-    key_points = [
-        f"Transcript length: {total_words} words",
-        f"Trigger hits: {total_hits}",
-        f"Top trigger terms: {', '.join(top_terms) if top_terms else 'none'}",
-    ]
+    if output_language == "ar":
+        summary = "تمت معالجة المحادثة محليًا. تم استخدام كثافة الكلمات التحذيرية كمؤشر رئيسي للمخاطر."
+        key_points = [
+            f"طول النص: {total_words} كلمة",
+            f"عدد الكلمات التحذيرية: {total_hits}",
+            f"أهم الكلمات التحذيرية: {', '.join(top_terms) if top_terms else 'لا يوجد'}",
+        ]
+    else:
+        summary = "Conversation processed locally. Trigger density was used as the main risk signal."
+        key_points = [
+            f"Transcript length: {total_words} words",
+            f"Trigger hits: {total_hits}",
+            f"Top trigger terms: {', '.join(top_terms) if top_terms else 'none'}",
+        ]
 
     return {
         "mode": "heuristic",
@@ -52,14 +63,14 @@ def _build_prompt(text: str, trigger_payload: dict[str, Any], output_language: s
     if output_language == "ar":
         return (
             "Analyze this customer support call transcript and provide a concise Arabic risk summary, "
-            "key issues, and recommended follow-up actions.\\n\\n"
-            f"Transcript:\\n{text[:12000]}\\n\\n"
+            "key issues, and recommended follow-up actions.\n\n"
+            f"Transcript:\n{text[:12000]}\n\n"
             f"Trigger counts: {json.dumps(trigger_payload.get('counts', {}), ensure_ascii=False)}"
         )
     return (
         "Analyze the following customer support call transcript. "
-        "Return a concise risk summary, key issues, and recommended follow-up.\\n\\n"
-        f"Transcript:\\n{text[:12000]}\\n\\n"
+        "Return a concise risk summary, key issues, and recommended follow-up.\n\n"
+        f"Transcript:\n{text[:12000]}\n\n"
         f"Trigger counts: {json.dumps(trigger_payload.get('counts', {}), ensure_ascii=False)}"
     )
 
@@ -95,6 +106,7 @@ def _discover_lmstudio_model(api_base_url: str) -> str | None:
     try:
         payload = _lmstudio_api_get(api_base_url, "models")
     except Exception:
+        logger.debug("Could not discover LM Studio models at %s", api_base_url)
         return None
     models = payload.get("data")
     if isinstance(models, list):
@@ -120,7 +132,7 @@ def _extract_chat_text(chat_response: dict[str, Any]) -> str:
             text = chunk.get("text")
             if isinstance(text, str):
                 parts.append(text)
-        return "\\n".join(parts).strip()
+        return "\n".join(parts).strip()
     return ""
 
 
@@ -151,17 +163,19 @@ def _lmstudio_llm_summary(
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.1,
-                "max_tokens": 220,
+                "max_tokens": 800,
             },
         )
         answer = _extract_chat_text(response)
         if not answer:
+            logger.warning("LM Studio returned empty response for model '%s'", model_name)
             return None
         base = _heuristic_summary(text, trigger_payload, output_language=output_language)
         base["mode"] = "lmstudio_llm"
         base["summary"] = answer[:4000]
         return base
-    except (url_error.URLError, TimeoutError, OSError, ValueError, KeyError):
+    except (url_error.URLError, TimeoutError, OSError, ValueError, KeyError) as exc:
+        logger.warning("LM Studio API call failed: %s", exc)
         return None
 
 
@@ -175,6 +189,7 @@ def _local_llm_summary(
     output_language: str = "en",
 ) -> dict[str, Any] | None:
     if not llm_model_path.exists():
+        logger.info("LLM model path does not exist: %s", llm_model_path)
         return None
 
     if llm_model_path.is_file() and llm_model_path.suffix.lower() == ".gguf":
@@ -188,18 +203,20 @@ def _local_llm_summary(
         )
 
     if not llm_model_path.is_dir():
+        logger.info("LLM model path is not a directory: %s", llm_model_path)
         return None
 
     prompt = _build_prompt(text, trigger_payload, output_language=output_language)
     try:
         generation_config = GenerationConfig(
-            max_new_tokens=220,
+            max_new_tokens=800,
             do_sample=False,
         )
         if quantization in {"4bit", "4-bit", "int4"}:
             try:
                 from transformers import BitsAndBytesConfig
             except Exception:
+                logger.warning("BitsAndBytesConfig not available; cannot use %s quantization", quantization)
                 return None
 
             quant_config = BitsAndBytesConfig(
@@ -241,7 +258,8 @@ def _local_llm_summary(
         base["mode"] = "local_llm_4bit" if quantization in {"4bit", "4-bit", "int4"} else "local_llm"
         base["summary"] = answer[:4000]
         return base
-    except Exception:
+    except Exception as exc:
+        logger.warning("Local LLM generation failed: %s", exc, exc_info=True)
         return None
 
 
@@ -265,7 +283,7 @@ def format_llm_report_text(llm_report: dict[str, Any], output_language: str = "e
     else:
         lines.append("- None")
 
-    return "\\n".join(lines).strip() + "\\n"
+    return "\n".join(lines).strip() + "\n"
 
 
 def evaluate_transcript(
@@ -286,6 +304,7 @@ def evaluate_transcript(
 
     llm_report = None
     if llm_model_path is not None:
+        logger.info("Attempting LLM summary with model: %s", llm_model_path)
         llm_report = _local_llm_summary(
             text,
             trigger_payload,
@@ -296,6 +315,7 @@ def evaluate_transcript(
             output_language=llm_output_language,
         )
     if llm_report is None:
+        logger.info("Using heuristic summary (LLM unavailable or skipped)")
         llm_report = _heuristic_summary(text, trigger_payload, output_language=llm_output_language)
 
     score_payload = {

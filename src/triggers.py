@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _snippet(text: str, start: int, end: int, radius: int = 60) -> str:
@@ -44,5 +47,6 @@ def write_triggers(text: str, terms: list[str], output_path: Path) -> dict:
     payload = find_triggers(text, terms)
     with output_path.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
+    logger.info("Trigger detection: %d hits across %d terms", payload["total_hits"], len(terms))
     return payload
 

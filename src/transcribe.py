@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_device(device_name: str) -> tuple[int, torch.dtype]:
@@ -50,6 +53,7 @@ class WhisperTranscriber:
             model_kwargs["variant"] = "fp32"
             model_kwargs["use_safetensors"] = True
 
+        logger.info("Loading Whisper model from %s (device=%s)", model_path, device)
         model = AutoModelForSpeechSeq2Seq.from_pretrained(str(model_path), **model_kwargs)
         processor = AutoProcessor.from_pretrained(str(model_path), local_files_only=True)
 
@@ -62,6 +66,7 @@ class WhisperTranscriber:
             dtype=torch_dtype,
             batch_size=batch_size,
         )
+        logger.info("Whisper model loaded successfully")
 
     def _generate_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"task": "transcribe"}
@@ -69,13 +74,8 @@ class WhisperTranscriber:
             kwargs["language"] = self.language
         return kwargs
 
-    def transcribe_chunk(self, chunk_path: Path) -> dict[str, Any]:
-        result = self.pipe(
-            str(chunk_path),
-            return_timestamps=True,
-            generate_kwargs=self._generate_kwargs(),
-        )
-
+    def _parse_result(self, result: dict[str, Any], chunk_path: Path) -> dict[str, Any]:
+        """Parse a single pipeline result into a transcript dict."""
         segments = []
         for segment in result.get("chunks", []):
             timestamp = segment.get("timestamp", (None, None))
@@ -86,12 +86,19 @@ class WhisperTranscriber:
                     "text": segment.get("text", "").strip(),
                 }
             )
-
         return {
             "chunk_file": chunk_path.name,
             "text": result.get("text", "").strip(),
             "segments": segments,
         }
+
+    def transcribe_chunk(self, chunk_path: Path) -> dict[str, Any]:
+        result = self.pipe(
+            str(chunk_path),
+            return_timestamps=True,
+            generate_kwargs=self._generate_kwargs(),
+        )
+        return self._parse_result(result, chunk_path)
 
     def transcribe_chunks(
         self,
@@ -102,22 +109,46 @@ class WhisperTranscriber:
         transcripts_dir.mkdir(parents=True, exist_ok=True)
         created: list[Path] = []
 
+        # Separate already-done chunks from to-do chunks
+        to_process: list[dict[str, Any]] = []
         for item in chunk_manifest:
-            chunk_path = Path(item["path"])
             transcript_path = transcripts_dir / f"chunk_{item['index']:03d}.json"
-
             if transcript_path.exists() and not force:
                 created.append(transcript_path)
-                continue
+            else:
+                to_process.append(item)
 
-            transcript = self.transcribe_chunk(chunk_path)
+        if not to_process:
+            logger.info("All %d chunks already transcribed, skipping", len(chunk_manifest))
+            return created
+
+        logger.info(
+            "Transcribing %d chunks (batch_size=%d, %d cached)",
+            len(to_process),
+            self.batch_size,
+            len(created),
+        )
+
+        # Use batched pipeline for better GPU utilization (E-2)
+        paths = [item["path"] for item in to_process]
+        results = self.pipe(
+            paths,
+            return_timestamps=True,
+            generate_kwargs=self._generate_kwargs(),
+            batch_size=self.batch_size,
+        )
+
+        for item, result in zip(to_process, results):
+            chunk_path = Path(item["path"])
+            transcript = self._parse_result(result, chunk_path)
             transcript["chunk_index"] = item["index"]
             transcript["chunk_start_sec"] = item.get("start_sec")
             transcript["chunk_end_sec"] = item.get("end_sec")
 
+            transcript_path = transcripts_dir / f"chunk_{item['index']:03d}.json"
             with transcript_path.open("w", encoding="utf-8") as fh:
                 json.dump(transcript, fh, ensure_ascii=False, indent=2)
-
             created.append(transcript_path)
 
+        logger.info("Transcription complete: %d chunks processed", len(to_process))
         return created

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
@@ -62,6 +65,8 @@ class TextClassifier:
 
         device_index = 0 if (device == "auto" and torch.cuda.is_available()) else -1
         torch_dtype = torch.float16 if device_index >= 0 else torch.float32
+
+        logger.info("Loading classifier from %s (device=%s)", model_path, device)
 
         tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
         model = AutoModelForSequenceClassification.from_pretrained(

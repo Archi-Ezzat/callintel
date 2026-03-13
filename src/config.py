@@ -1,16 +1,61 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
+DEFAULT_TRIGGERS_BY_LANG: dict[str, list[str]] = {
+    "ar": [
+        "إلغاء",
+        "استرداد",
+        "زعلان",
+        "غاضب",
+        "تصعيد",
+        "شكوى",
+        "دعوى",
+        "مدير",
+        "مش راضي",
+    ],
+    "en": [
+        "cancel",
+        "refund",
+        "angry",
+        "escalate",
+        "complaint",
+        "lawsuit",
+        "supervisor",
+        "not happy",
+    ],
+}
+
 
 def _split_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _env_first(*keys: str) -> str | None:
+    """Return the first non-empty environment value for the given keys."""
+    for key in keys:
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _env_int(key: str, default: int) -> int:
+    """Read an integer from the environment with a descriptive error on failure."""
+    raw = os.getenv(key, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(f"Invalid integer value for {key}: '{raw}'") from None
 
 
 @dataclass(frozen=True)
@@ -26,6 +71,9 @@ class AppConfig:
     llm_api_model: str | None
     llm_output_language: str
     classifier_model_path: Path | None
+    sentiment_model_path: Path | None
+    hf_token: str | None
+    diarization_model: str | None
     sample_rate: int
     chunk_seconds: int
     chunk_overlap_seconds: int
@@ -58,20 +106,24 @@ class AppConfig:
         )
         classifier_path_raw = os.getenv("CLASSIFIER_MODEL_PATH", "").strip()
         classifier_model_path = (resolved_root / classifier_path_raw) if classifier_path_raw else None
+        sentiment_path_raw = os.getenv("SENTIMENT_MODEL_PATH", "models/sentiment").strip()
+        sentiment_model_path = (resolved_root / sentiment_path_raw) if sentiment_path_raw else None
+        hf_token = _env_first("HF_TOKEN", "HUGGINGFACE_TOKEN")
+        diarization_model = os.getenv("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1").strip() or None
 
         trigger_terms = _split_csv(os.getenv("TRIGGER_TERMS"))
         if not trigger_terms:
-            trigger_terms = [
-                "cancel",
-                "refund",
-                "angry",
-                "escalate",
-                "complaint",
-                "lawsuit",
-                "supervisor",
-            ]
+            lang_key = language.lower() if language else "en"
+            trigger_terms = DEFAULT_TRIGGERS_BY_LANG.get(
+                lang_key, DEFAULT_TRIGGERS_BY_LANG["en"]
+            )
 
-        return cls(
+        sample_rate = _env_int("SAMPLE_RATE", 16000)
+        chunk_seconds = _env_int("CHUNK_SECONDS", 30)
+        chunk_overlap = _env_int("CHUNK_OVERLAP_SECONDS", 2)
+        batch_size = _env_int("BATCH_SIZE", 8)
+
+        config = cls(
             root_dir=resolved_root,
             input_calls_dir=input_calls_dir,
             work_dir=work_dir,
@@ -83,19 +135,22 @@ class AppConfig:
             llm_api_model=llm_api_model,
             llm_output_language=llm_output_language,
             classifier_model_path=classifier_model_path,
-            sample_rate=int(os.getenv("SAMPLE_RATE", "16000")),
-            chunk_seconds=int(os.getenv("CHUNK_SECONDS", "30")),
-            chunk_overlap_seconds=int(os.getenv("CHUNK_OVERLAP_SECONDS", "2")),
-            batch_size=int(os.getenv("BATCH_SIZE", "8")),
+            sentiment_model_path=sentiment_model_path,
+            hf_token=hf_token,
+            diarization_model=diarization_model,
+            sample_rate=sample_rate,
+            chunk_seconds=chunk_seconds,
+            chunk_overlap_seconds=chunk_overlap,
+            batch_size=batch_size,
             device=os.getenv("DEVICE", "auto").strip().lower(),
             language=language or None,
             trigger_terms=trigger_terms,
         )
+        logger.debug("Loaded config: language=%s, device=%s", config.language, config.device)
+        return config
 
 
 def ensure_base_dirs(config: AppConfig) -> None:
     config.input_calls_dir.mkdir(parents=True, exist_ok=True)
     config.work_dir.mkdir(parents=True, exist_ok=True)
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    if config.classifier_model_path is not None:
-        config.classifier_model_path.mkdir(parents=True, exist_ok=True)
