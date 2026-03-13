@@ -7,7 +7,7 @@ CallIntel is a local-first pipeline for:
 3. Transcribing with Whisper
 4. Merging transcripts
 5. Flagging trigger terms
-6. Producing an LLM-style analysis report and score
+6. Producing a risk report and summary
 
 ## Project Layout
 
@@ -19,6 +19,7 @@ callintel/
 
   models/
     whisper-large-v3/
+    sentiment/
     llm/
 
   data/
@@ -32,6 +33,9 @@ callintel/
           llm_report.txt
           llm_report.json
           score.json
+          combined_risk.json
+          sentiment.json
+          diarization.json
     work/
       0001_callname/
         audio/
@@ -39,6 +43,10 @@ callintel/
         transcripts/
         merged/
         analysis/
+
+  scripts/
+    setup.py
+    download_models.py
 
   src/
     config.py
@@ -52,44 +60,49 @@ callintel/
 
 ## Setup
 
+Fresh machine, required runtime only:
+
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+.\.venv\Scripts\Activate.ps1
+python scripts/setup.py
 ```
 
-Copy environment defaults:
+That setup command will:
+
+- create `.env` from `.env.example` if needed
+- install the project dependencies
+- download the required Whisper model into `models/whisper-large-v3`
+
+Recommended full setup:
 
 ```bash
-copy .env.example .env
+python scripts/setup.py --all
 ```
 
-## Model Preparation
+That also downloads the sentiment model and installs diarization support.
 
-Place a Whisper model snapshot in:
+Manual model download is still available:
 
-`models/whisper-large-v3`
+```bash
+python scripts/download_models.py --whisper
+python scripts/download_models.py --all
+```
 
-Optionally place a local text-generation model in:
+Notes:
 
-`models/llm`
+- diarization needs `HF_TOKEN` in `.env`
+- the local LLM is optional; if `models/llm` is empty, the pipeline falls back to heuristic reporting
+- for MP3 and some other codecs, `ffmpeg` may still be required on the machine
 
-If `models/llm` is empty, the pipeline falls back to deterministic heuristic reporting.
-
-You can enable 4-bit quantization for the local LLM by setting:
-
-`LLM_QUANTIZATION=4bit`
-
-To force Arabic transcription and Arabic LLM reports:
+To force Arabic transcription and Arabic output:
 
 - `LANGUAGE=ar`
 - `LLM_OUTPUT_LANGUAGE=ar`
 
-## Classifier (Multi-Path Accuracy)
+## Classifier
 
-This project supports a rule-based risk engine **and** an optional ML classifier.
-
-### Seed data
+This project supports a rule-based risk engine and an optional ML classifier.
 
 Seed samples live in:
 
@@ -97,13 +110,13 @@ Seed samples live in:
 
 Create your training file by copying:
 
-`data/training/seed.jsonl` → `data/training/train.jsonl`
+`data/training/seed.jsonl` -> `data/training/train.jsonl`
 
-You can add more data or generate synthetic samples, then (optionally) create:
+You can add more data or generate synthetic samples, then optionally create:
 
 `data/training/val.jsonl`
 
-### Train the classifier
+Train the classifier with:
 
 ```bash
 .\.venv\Scripts\python.exe -m src.train_classifier
@@ -113,9 +126,7 @@ This fine-tunes `UBC-NLP/MARBERTv2` and writes to:
 
 `models/classifier`
 
-### Use the classifier in the pipeline
-
-Set:
+Then set:
 
 `CLASSIFIER_MODEL_PATH=models/classifier`
 
@@ -125,7 +136,7 @@ Drop your audio files in:
 
 `data/input_calls`
 
-Supported formats include `.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.aac`.
+Supported formats include `.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, and `.aac`.
 
 ## Run
 
@@ -138,6 +149,9 @@ Useful options:
 ```bash
 python -m src.pipeline --file data/input_calls/sample_call.mp3
 python -m src.pipeline --skip-llm
+python -m src.pipeline --skip-sentiment
+python -m src.pipeline --skip-diarize
+python -m src.pipeline --redact-pii
 python -m src.pipeline --force
 ```
 
@@ -147,23 +161,11 @@ Final deliverables go to:
 
 `data/output/<audio filename>/`
 
-Inside you will see exactly two folders:
+Inside you will see:
 
-- `Transcript/` (contains `transcript.txt` and `transcript.json`)
-- `LLM_Justification/` (contains `llm_report.txt`, `llm_report.json`, `score.json`,
-  plus `risk_detail.json` and `risk_summary.txt`)
+- `Transcript/` with `transcript.txt` and `transcript.json`
+- `LLM_Justification/` with the risk, sentiment, diarization, and summary artifacts
 
-Intermediate artifacts still live in the workspace directory:
+Intermediate artifacts still live in:
 
 `data/work/0001_callname`
-
-Artifacts:
-
-- `audio/normalized.wav`
-- `chunks/chunk_000.wav`, ...
-- `transcripts/chunk_000.json`, ...
-- `merged/transcript_full.txt`
-- `merged/transcript_full.json`
-- `analysis/triggers.json`
-- `analysis/llm_report.json`
-- `analysis/score.json`

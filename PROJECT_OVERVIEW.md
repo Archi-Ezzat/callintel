@@ -1,10 +1,10 @@
 # CallIntel: Project Overview & Pipeline Documentation
 
 ## 1. Project Overview
-CallIntel is a robust, modular pipeline designed for the automated analysis of Arabic (and English) call recordings. It transforms raw audio into a structured intelligence report by performing transcription, sentiment analysis, risk assessment, topic classification, and PII redaction.
+CallIntel is a robust, modular pipeline designed for the automated analysis of Arabic and English call recordings. It transforms raw audio into a structured intelligence report by performing transcription, sentiment analysis, risk assessment, topic classification, and PII redaction.
 
 ## 2. System Architecture
-The system follows a **Modular Stage-Based Architecture**. Each stage is independent, testable, and produces intermediate artifacts in a temporary workspace before final export.
+The system follows a modular stage-based architecture. Each stage is independent, testable, and produces intermediate artifacts in a temporary workspace before final export.
 
 ### The Pipeline Process
 ```mermaid
@@ -32,60 +32,87 @@ graph TD
 
 | Stage | Module | Description |
 |---|---|---|
-| **Normalize** | `utils_audio.py` | Converts audio to 16kHz mono WAV for model compatibility and consistent volume. |
-| **Chunk** | `utils_audio.py` | Splits long audio into 30s chunks (with 2s overlap) to optimize GPU memory during transcription. |
-| **Transcribe** | `transcribe.py` | Uses OpenAI Whisper (Large-v3) to convert audio chunks into text segments with timestamps. |
+| **Normalize** | `utils_audio.py` | Converts audio to 16 kHz mono WAV for model compatibility and consistent volume. |
+| **Chunk** | `utils_audio.py` | Splits long audio into 30 second chunks with 2 second overlap to optimize GPU memory during transcription. |
+| **Transcribe** | `transcribe.py` | Uses Whisper Large v3 to convert audio chunks into text segments with timestamps. |
 | **Merge** | `merge.py` | Stitches chunks back together using a suffix-prefix overlap deduplication algorithm. |
-| **PII Redact** | `pii_redact.py` | (Optional) Masks sensitive data like Egyptian IDs, Credit Cards, and Phone numbers. |
-| **Diarization** | `diarize.py` | Uses Pyannote 3.1 to identify speakers (SPEAKER_00, etc.) and align them with the text. |
-| **Triggers** | `triggers.py` | Scans for specific keywords (Manager, Order, Refund, etc.) defined in `config.py`. |
-| **Risk Engine** | `risk_engine.py` | Rule-based scoring using a multi-category dataset (`data/bad_words.json`). Handle Arabic normalization. |
-| **Classifier** | `classifier.py` | Uses MARBERTv2 to categorize the call (Sales, Support, Complaint, etc.) and detect content-based risk. |
-| **Sentiment** | `sentiment.py` | Analyzes Arabic sentiment (Negative/Neutral/Positive) using CAMeLBERT. |
-| **Combined Risk** | `pipeline.py` | Merges scores from rules, ML, and sentiment. Adds a **Position Bonus** if risks appear at the call's end. |
-| **LLM Eval** | `evaluate_llm.py` | Generates a concise summary and structured report using a local LLM or heuristic fallback. |
+| **PII Redact** | `pii_redact.py` | Optionally masks sensitive data like Egyptian IDs, credit cards, and phone numbers. |
+| **Diarization** | `diarize.py` | Uses Pyannote 3.1 to identify speakers and align them with the transcript. |
+| **Triggers** | `triggers.py` | Scans for trigger keywords defined in `config.py`. |
+| **Risk Engine** | `risk_engine.py` | Rule-based scoring using a multi-category dataset and Arabic normalization. |
+| **Classifier** | `classifier.py` | Uses MARBERTv2 to categorize the call and detect content-based risk. |
+| **Sentiment** | `sentiment.py` | Analyzes Arabic sentiment using CAMeLBERT. |
+| **Combined Risk** | `pipeline.py` | Merges scores from rules, ML, and sentiment and adds a position bonus for late-call risk. |
+| **LLM Eval** | `evaluate_llm.py` | Generates a concise summary using a local LLM or a heuristic fallback. |
 
 ---
 
 ## 4. Models Used
 
-1.  **Whisper (Large-v3)**: State-of-the-art multi-lingual ASR.
-2.  **CAMeLBERT Sentiment**: Specialized for Arabic sentiment (Mix Sentiment model).
-3.  **MARBERTv2**: Optimized for Arabic dialect and MSA classification.
-4.  **Pyannote 3.1**: Advanced speaker diarization (needs HF License).
+1. **Whisper (Large-v3)**: multilingual ASR for transcription.
+2. **CAMeLBERT Sentiment**: Arabic sentiment model.
+3. **MARBERTv2**: Arabic dialect and MSA classifier.
+4. **Pyannote 3.1**: speaker diarization pipeline.
 
 ---
 
 ## 5. Output Documentation
-When a call is processed, a folder is created in `data/output/` named after the file (e.g., `test_call_2023_03_13/`).
+When a call is processed, a folder is created in `data/output/` named after the audio filename.
 
 ### Directory Structure
 ```text
-output/test_call/
-├── Transcript/
-│   ├── transcript.txt      # Raw merged text
-│   └── transcript.json     # Full JSON with speaker labels and timestamps
-└── Analysis/
-    ├── combined_risk.txt   # Human-readable risk dashboard
-    ├── combined_risk.json  # Machine-readable final score (0.0 - 1.0)
-    ├── sentiment.json      # Sentiment breakdown and risk boost
-    ├── diarization.json    # Speaker segments and total durations
-    ├── pii_redaction.json  # Summary of masked sensitive info
-    ├── risk_detail.json    # List of all suspicious words/sentences found
-    ├── classifier_detail.json # Call categorization results
-    ├── llm_report.txt      # ChatGPT-style executive summary
-    └── llm_report.json     # Structured summary data
+output/test_call.mp3/
+|-- Transcript/
+|   |-- transcript.txt
+|   `-- transcript.json
+`-- LLM_Justification/
+    |-- combined_risk.txt
+    |-- combined_risk.json
+    |-- sentiment.json
+    |-- diarization.json
+    |-- pii_redaction.json
+    |-- risk_detail.json
+    |-- classifier_detail.json
+    |-- llm_report.txt
+    |-- llm_report.json
+    `-- score.json
 ```
 
 ---
 
-## 6. How to Configure
-The system uses environment variables (loaded from `.env`):
-- `LANGUAGE`: The default language for trigger detection (`ar` or `en`).
-- `TRIGGER_TERMS`: Comma-separated list of words to watch for.
-- `WHISPER_MODEL_PATH`: Location of the local Whisper weights.
-- `HF_TOKEN`: Your HuggingFace token (required for Diarization).
+## 6. Quick Setup On A New Machine
 
-## 7. Quality Assurance
+Minimal runtime setup:
+
+```bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python scripts/setup.py
+```
+
+That installs the Python dependencies, creates `.env` if needed, and downloads the required Whisper model to `models/whisper-large-v3`.
+
+Optional full setup:
+
+```bash
+python scripts/setup.py --all
+```
+
+This also downloads the sentiment model and installs diarization support. Diarization requires `HF_TOKEN` in `.env`.
+
+---
+
+## 7. How To Configure
+The system uses environment variables loaded from `.env`:
+
+- `LANGUAGE`: default language for trigger detection (`ar` or `en`)
+- `TRIGGER_TERMS`: comma-separated list of words to watch for
+- `WHISPER_MODEL_PATH`: location of the local Whisper weights
+- `SENTIMENT_MODEL_PATH`: location of the local sentiment model
+- `CLASSIFIER_MODEL_PATH`: location of the optional classifier model
+- `HF_TOKEN`: Hugging Face token required for diarization
+
+## 8. Quality Assurance
 The project includes **111 unit tests** in the `tests/` directory covering every module. Run them with:
+
 `python -m pytest tests/`

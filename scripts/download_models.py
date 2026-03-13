@@ -1,21 +1,31 @@
 """Download pre-trained models for CallIntel.
 
 Usage:
-    python scripts/download_models.py [--sentiment] [--diarize] [--all]
+    python scripts/download_models.py [--whisper] [--sentiment] [--diarize] [--all]
 
-Models are saved to the ``models/`` directory, except for pyannote which uses the HuggingFace cache.
+Whisper and sentiment models are saved under ``models/``.
+Pyannote diarization uses the Hugging Face cache and requires ``HF_TOKEN``.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT_DIR / "models"
 
 MODELS = {
+    "whisper": {
+        "repo_id": "openai/whisper-large-v3",
+        "local_dir": MODELS_DIR / "whisper-large-v3",
+        "description": "Speech recognition (Whisper Large v3)",
+        "size_hint": "~3.1 GB",
+    },
     "sentiment": {
         "repo_id": "CAMeL-Lab/bert-base-arabic-camelbert-mix-sentiment",
         "local_dir": MODELS_DIR / "sentiment",
@@ -36,67 +46,74 @@ def download_model(key: str) -> None:
     print(f"  Size:  {info['size_hint']}")
     print(f"{'=' * 60}\n")
 
+    info["local_dir"].mkdir(parents=True, exist_ok=True)
     snapshot_download(
         repo_id=info["repo_id"],
         local_dir=str(info["local_dir"]),
         local_dir_use_symlinks=False,
     )
-    print(f"\n✓ {key} model saved to {info['local_dir']}")
+    print(f"\nOK: {key} model saved to {info['local_dir']}")
 
 
 def download_diarization() -> None:
-    from dotenv import load_dotenv
-    import os
-    
     load_dotenv()
-    # Check both potential token names as added to config.py
     hf_token = os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACE_TOKEN", "").strip()
     if not hf_token:
-        print("\nERROR: Neither HF_TOKEN nor HUGGINGFACE_TOKEN found in environment or .env file.")
-        print("Please add your HuggingFace token to use pyannote/speaker-diarization-3.1")
+        print("\nERROR: Neither HF_TOKEN nor HUGGINGFACE_TOKEN is set.")
+        print("Add your Hugging Face token to .env before downloading diarization.")
         sys.exit(1)
-        
+
     print(f"\n{'=' * 60}")
     print("Downloading: Speaker Diarization (pyannote.audio)")
     print("  Repo:  pyannote/speaker-diarization-3.1")
-    print("  Dest:  HuggingFace Hub Cache")
+    print("  Dest:  Hugging Face cache")
     print("  Size:  ~600 MB")
     print(f"{'=' * 60}\n")
-    
-    # Importing Pipeline triggers the download of the required models
+
     try:
         from pyannote.audio import Pipeline
-        # Aligned with user's edit to diarize.py using token= argument
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=hf_token)
-        print("\n✓ Diarization pipeline loaded and cached successfully!")
-    except Exception as e:
-        print(f"\nERROR loading diarization pipeline: {e}")
+    except ImportError:
+        print("\nERROR: pyannote.audio is not installed.")
+        print("Install it first with: pip install -e .[diarize]")
+        sys.exit(1)
+
+    try:
+        Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=hf_token)
+        print("\nOK: diarization pipeline loaded and cached successfully")
+    except Exception as exc:
+        print(f"\nERROR loading diarization pipeline: {exc}")
         sys.exit(1)
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Download models for CallIntel")
+    parser.add_argument("--whisper", action="store_true", help="Download Whisper Large v3 (~3.1 GB)")
     parser.add_argument("--sentiment", action="store_true", help="Download sentiment model (~436 MB)")
-    parser.add_argument("--diarize", action="store_true", help="Download speaker diarization model (~600 MB)")
-    parser.add_argument("--all", action="store_true", help="Download all available models")
-    args = parser.parse_args()
+    parser.add_argument("--diarize", action="store_true", help="Download pyannote diarization (~600 MB)")
+    parser.add_argument("--all", action="store_true", help="Download all supported models")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
 
     targets: list[str] = []
     if args.all:
-        targets = list(MODELS.keys())
-        targets.append("diarize")
+        targets = ["whisper", "sentiment", "diarize"]
     else:
+        if args.whisper:
+            targets.append("whisper")
         if args.sentiment:
             targets.append("sentiment")
         if args.diarize:
             targets.append("diarize")
 
     if not targets:
-        print("No models selected. Use --sentiment, --diarize, or --all")
+        print("No models selected. Use --whisper, --sentiment, --diarize, or --all")
         print("\nAvailable models:")
         for key, info in MODELS.items():
-            print(f"  --{key:20s} {info['description']:40s} ({info['size_hint']})")
-        print(f"  --{'diarize':20s} {'Speaker Diarization (Requires HF_TOKEN)':40s} (~600 MB)")
+            print(f"  --{key:12s} {info['description']:42s} ({info['size_hint']})")
+        print(f"  --{'diarize':12s} {'Speaker diarization (HF token required)':42s} (~600 MB)")
         sys.exit(1)
 
     for key in targets:
@@ -105,7 +122,7 @@ def main() -> None:
         else:
             download_model(key)
 
-    print(f"\nAll done! {len(targets)} model(s) downloaded.")
+    print(f"\nAll done. {len(targets)} model(s) processed.")
 
 
 if __name__ == "__main__":
